@@ -1,0 +1,46 @@
+import sensor, image, time
+sensor.reset()
+sensor.set_pixformat(sensor.GRAYSCALE)
+sensor.set_framesize(sensor.QQVGA)  # 160x120
+sensor.skip_frames(time=2000)
+sensor.set_auto_gain(False)
+sensor.set_auto_whitebal(False)
+sensor.set_auto_exposure(False, exposure_us=10000)  # 可根据亮度调节
+
+# -----------------------
+# 加载多个模板图像
+# -----------------------
+template_files = [
+    "/templateS.pgm",
+    "/templateN.pgm",
+    "/templateR.pgm",
+    "/templateL.pgm",
+]
+
+templates = [image.Image(path) for path in template_files]
+
+# 匹配参数
+THRESH = 0.6
+STEP = 4
+SEARCH = image.SEARCH_DS  # 更快的钻石搜索
+
+clock = time.clock()
+
+while True:
+    clock.tick()
+    img = sensor.snapshot()
+    matched = False
+
+    for tpl in templates:
+        r = img.find_template(tpl, THRESH, step=STEP, search=SEARCH)
+        if r:
+            img.draw_rectangle(r, color=255)
+            img.draw_cross(r[0]+r[2]//2, r[1]+r[3]//2, color=255)
+            print("✅ 匹配成功：", r)
+            matched = True
+            break  # 只用第一个成功的模板
+
+    if not matched:
+        print("❌ 未匹配到模板")
+
+    print("FPS:", clock.fps())

@@ -1,51 +1,46 @@
 import sensor, image, time
 
-# 摄像头初始化
+# ------------------------
+# 摄像头 + 模板加载
+# ------------------------
 sensor.reset()
-sensor.set_pixformat(sensor.RGB565)
-sensor.set_framesize(sensor.QVGA)
-sensor.set_contrast(3)
-sensor.set_gainceiling(16)
-sensor.set_vflip(False)
-sensor.skip_frames(10)
-sensor.set_auto_exposure(False, exposure_us=30000)
-sensor.set_auto_whitebal(False)
+sensor.set_pixformat(sensor.RGB565)      # 彩色输出，好画红点
+sensor.set_framesize(sensor.QQVGA)       # 160×120，加速处理
+sensor.skip_frames(time = 2000)          # 等待自动参数稳定
+sensor.set_auto_gain(False)              # 关自动增益
+sensor.set_auto_whitebal(False)          # 关自动白平衡
+sensor.set_auto_exposure(False, exposure_us=20000)  # 固定曝光
+
+# 加载你保存的模板
+tpl = image.Image("/template.png")       # 文件名要和你保存在 SD 卡上的一致
+
+# 模板匹配参数
+THRESH = 0.70               # 阈值从 0.5～0.8 之间调整
+STEP   = 4                  # 搜索步长，越大越快但精度略差
+SEARCH = image.SEARCH_EX    # 快速外插法
+
 clock = time.clock()
 
 while True:
     clock.tick()
-    img = sensor.snapshot()
+    img = sensor.snapshot()  # 彩色帧，方便可视化
 
-    # 转灰度图
-    gray = img.to_grayscale()
+    # 执行模板匹配
+    match = img.find_template(tpl, THRESH, step=STEP, search=SEARCH)
+    if match:
+        # 如果返回的是列表，就取第一个(match[0])；否则它就是单个 tuple
+        if isinstance(match, list):
+            match = match[0]
+        mx, my, mw, mh = match
 
-    # 二值化：只保留黑色（0~20），其余全部设为白色255
-    # invert=True 反转后：黑底变白，黑色区域才为255
-    binary = gray.binary([(0, 20)], invert=True)
+        # 计算矩形中心
+        cx = mx + mw // 2
+        cy = my + mh // 2
 
-    # 形态学闭运算填补矩形边缘缺口（提高鲁棒性）
-    binary.dilate(1)
-    binary.erode(1)
+        # 在原图上画红十字和红圈
+        img.draw_cross(cx, cy, color=(255, 0, 0), size=15)
+        img.draw_circle(cx, cy,  8,   (255, 0, 0))
 
-    # 查找所有矩形
-    rects = binary.find_rects(threshold=10000)
-
-    if rects:
-        # 选最大矩形（面积最大）
-        outer_rect = max(rects, key=lambda r: r.w() * r.h())
-
-        # 画红框
-        img.draw_rectangle(outer_rect.rect(), color=(255, 0, 0))
-
-        # 获取角点
-        corners = outer_rect.corners()
-        for p in corners:
-            img.draw_cross(p[0], p[1], color=(0, 255, 0))  # 绿叉角点
-        print("外部矩形角点坐标:", corners)
-
-        # 中心点坐标（用 rect 中心）
-        r = outer_rect.rect()  # (x, y, w, h)
-        center_x = r[0] + r[2] // 2
-        center_y = r[1] + r[3] // 2
-        img.draw_cross(center_x, center_y, color=(255, 255, 255))  # 白叉中心
-        print("中心点坐标: ({}, {})".format(center_x, center_y))
+        print("FPS:%.1f  中心:(%d,%d)" % (clock.fps(), cx, cy))
+    else:
+        print("FPS:%.1f  未匹配到矩形" % clock.fps())
