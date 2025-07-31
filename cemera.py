@@ -1,4 +1,6 @@
-import sensor, image, time, math
+import sensor, image, time
+from pyb import Timer, Pin
+from SMC2 import SMC
 
 sensor.reset()
 sensor.set_pixformat(sensor.GRAYSCALE)
@@ -6,68 +8,86 @@ sensor.set_framesize(sensor.QQVGA)
 sensor.skip_frames(time=2000)
 sensor.set_auto_gain(False)
 sensor.set_auto_whitebal(False)
-sensor.set_auto_exposure(False, exposure_us=20000)  # 手动曝光 20 ms
+sensor.set_auto_exposure(False, exposure_us=20000)
+
+pan_SMC = SMC(2, 50, 60, 2)
+
+DISABLE = 1
+ENABLE = 0
+
+sq = Pin('P7', Pin.OUT_PP)
+ENB = Pin('P2', Pin.OUT_PP)
+DIR = Pin('P3', Pin.OUT_PP)
+
+ENB.value(DISABLE)
+
+tim = Timer(4, freq=500)
+ch = tim.channel(1, Timer.PWM, pin=sq, pulse_width_percent=50)
 
 RECT_THRESHOLD    = 12000
 INIT_FRAMES       = 3
 TRACK_DIST_SQR    = 30**2
 LOSE_RESET_FRAMES = 5
+DEADZONE          = 2
 
-A4_RATIO = math.sqrt(2)        # ≈1.414
-RATIO_TOL = 0.1                # ±10% 容差，可根据实际调小到 ±5% (0.05)
+centerx = 60
+# centery = 60
 
-history   = []                  # 用于确认目标
+CW = 0
+CCW = 1
+
+history   = []
 confirmed = None
 conf_cnt  = 0
 lose_cnt  = 0
+limmit = DISABLE
 
 clock = time.clock()
 while True:
     clock.tick()
     img = sensor.snapshot()
-
     rects = img.find_rects(threshold = RECT_THRESHOLD)
     if rects:
         lose_cnt = 0
-        # 遍历所有候选，挑最符合 A4 纸比例的
-        best = None
-        best_diff = 1e6
-        for r in rects:
-            w, h = r.w(), r.h()
-            aspect = max(w, h) / float(min(w, h))
-            diff = abs(aspect - A4_RATIO)
-            if diff < best_diff:
-                best_diff = diff
-                best = (r, w, h, aspect, diff)
+        r = rects[0]
+        x,y,w,h = r.rect()
+        cx, cy = x + w//2, y + h//2
 
-        # 如果最优候选足够接近，再“确认”它
-        r, w, h, aspect, diff = best
-        if diff < RATIO_TOL:
-            x, y = r.x(), r.y()
-            cx, cy = x + w//2, y + h//2
-
-            if confirmed is None:
-                history.append((cx, cy))
-                conf_cnt += 1
-                if conf_cnt >= INIT_FRAMES:
-                    confirmed = (cx, cy)
-            else:
-                px, py = confirmed
-                if (cx-px)**2 + (cy-py)**2 < TRACK_DIST_SQR:
-                    confirmed = (cx, cy)
+        if confirmed is None:
+            history.append((cx, cy))
+            conf_cnt += 1
+            if conf_cnt >= INIT_FRAMES:
+                confirmed = (cx, cy)
         else:
-            # 没有合格的 A4 候选，视为“没检测到”
-            rects = []
-
+            px, py = confirmed
+            if (cx-px)**2 + (cy-py)**2 < TRACK_DIST_SQR:
+                confirmed = (cx, cy)
     else:
         lose_cnt += 1
         if lose_cnt >= LOSE_RESET_FRAMES:
             confirmed = None
             history.clear()
-            conf_cnt = lose_cnt = 0
+            conf_cnt = 0
+            lose_cnt = 0
 
     if confirmed:
         cx, cy = confirmed
         img.draw_rectangle((cx - w//2, cy - h//2, w, h))
         img.draw_cross(cx, cy)
-        print("A4 Center:", cx, cy, "Aspect:", aspect)
+        # print("Center:", cx, cy)
+
+        if abs(cy - centerx) >= DEADZONE:
+            ENB.value(ENABLE)
+            pan_SMC.sliding_mode_init(cy, centerx)
+            pan_SMC.sliding_mode_control_law()
+            pan_U_abs, pan_U_sign = pan_SMC.get_control_input()
+            tim.freq(1 + pan_U_abs*8 )  # 仅更新频率，避免重新创建 Timer
+
+            DIR.value(pan_U_sign)
+            print(f"error:{cy - centerx}")
+        else:
+            ENB.value(DISABLE)
+    # 可选：打印当前帧率，监测性能
+    # print("FPS:", clock.fps())
+
+
